@@ -1,0 +1,16 @@
+# Flask and Web Framework
+Flask==3.0.0
+Flask-Limiter==3.5.0
+Werkzeug==3.0.1
+
+# Machine Learning & NLP
+torch==2.1.2
+transformers==4.36.2
+datasets==2.16.1
+
+# Utilities
+numpy==1.26.3
+scikit-learn
+
+# For API testing (optional)
+requests==2.31.0

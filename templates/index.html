@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Toxicity & Sentiment Analysis</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- PDF.js for PDF parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <!-- Mammoth for Word document parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+</head>
+
+<body>
+<div class="container">
+
+    <h1>Toxicity & Sentiment Analysis</h1>
+    <p class="subtitle">AI-Powered Toxicity Detection and Explanation</p>
+
+    <!-- Mode Toggle -->
+    <div class="mode-toggle">
+        <button class="mode-btn active" data-mode="single" onclick="switchMode('single')">
+            📝 Single Analysis
+        </button>
+        <button class="mode-btn" data-mode="batch" onclick="switchMode('batch')">
+            📊 Batch Analysis
+        </button>
+    </div>
+
+    {% if error %}
+    <div class="error-box">
+        <strong>⚠️ Error:</strong> {{ error }}
+    </div>
+    {% endif %}
+
+    <!-- Single Analysis Form -->
+    <div id="singleMode" class="analysis-mode">
+    <form method="POST" id="analyzeForm">
+        <textarea name="text" id="textInput" rows="4" maxlength="500"
+            placeholder="Enter a comment to analyze…" required></textarea>
+
+        <div class="actions">
+            <span class="count" id="charCount">0 / 500 characters</span>
+            <div class="button-group">
+                <button type="button" id="clearBtn" class="btn-secondary">Clear</button>
+                <button type="submit" id="analyzeBtn">Analyze</button>
+            </div>
+        </div>
+    </form>
+    </div>
+
+    <!-- Batch Analysis Form -->
+    <div id="batchMode" class="analysis-mode" style="display: none;">
+        <div class="batch-instructions">
+            <h3>📋 Batch Analysis</h3>
+            <p>Analyze multiple comments at once. Enter one comment per line (max 20 comments) or import from a file.</p>
+        </div>
+        
+        <!-- File Import Section -->
+        <div class="file-import-section">
+            <label for="fileInput" class="file-input-label">
+                📁 Import from File (PDF, Word, CSV, TXT)
+            </label>
+            <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.csv,.txt" style="display: none;">
+            <button type="button" id="importFileBtn" class="btn-import">
+                📤 Choose File to Import
+            </button>
+            <span id="fileNameDisplay" class="file-name-display"></span>
+        </div>
+        
+        <textarea id="batchInput" rows="10" maxlength="10000"
+            placeholder="Enter comments here, one per line...&#10;Or import from a file using the button above&#10;&#10;Example:&#10;This is the first comment&#10;This is the second comment&#10;This is the third comment"></textarea>
+        
+        <div class="actions">
+            <span class="count" id="batchCount">0 comments</span>
+            <div class="button-group">
+                <button type="button" id="clearBatchBtn" class="btn-secondary">Clear</button>
+                <button type="button" id="analyzeBatchBtn" class="btn-primary">Analyze Batch</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="loadingSpinner" class="loading" style="display: none;">
+        <div class="spinner"></div>
+        <p>Analyzing text...</p>
+    </div>
+
+    {% if result %}
+    <div class="result" id="resultBox">
+
+        <h4>Highlighted Comment</h4>
+        <div class="highlight-box">
+            {{ result.highlighted | safe }}
+            <button class="copy-btn" onclick="copyText()" title="Copy to clipboard">📋 Copy</button>
+        </div>
+
+        <div class="result-grid">
+            <div class="result-card">
+                <p class="label">Sentiment</p>
+                <p class="value sentiment-{{ result.sentiment|lower }}">{{ result.sentiment }}</p>
+            </div>
+            <div class="result-card">
+                <p class="label">Overall Toxicity</p>
+                <p class="value">
+                    <span class="badge {{ result.level|lower }}">
+                        {{ result.level }} ({{ result.overall }})
+                    </span>
+                </p>
+            </div>
+        </div>
+
+        <div class="explanation-box">
+            <strong>🔍 Analysis:</strong> {{ result.explanation }}
+        </div>
+
+        <!-- Rephrase Suggestions Section -->
+        {% if result.suggestions and result.suggestions|length > 0 %}
+        <div class="rephrase-section">
+            <h4>💡 Rephrase Suggestions</h4>
+            <p class="rephrase-hint">Here are alternative phrasings for your input comment to improve your message:</p>
+            <div class="original-comment-box">
+                <strong>Original comment:</strong> "{{ result.text }}"
+            </div>
+            
+            <div id="suggestionsContainer">
+                <div class="suggestions-grid">
+                    {% for suggestion in result.suggestions %}
+                    <div class="suggestion-card">
+                        <div class="suggestion-header">
+                            <span class="strategy-badge">{{ suggestion.strategy }}</span>
+                            {% if suggestion.comparison and suggestion.comparison.is_better %}
+                            <span class="improvement-badge improvement-positive">
+                                ⬇️ {{ suggestion.comparison.improvement_percent|round|int }}% less toxic
+                            </span>
+                            {% endif %}
+                        </div>
+                        
+                        <div class="suggestion-text">{{ suggestion.text }}</div>
+                        
+                        <div class="suggestion-description">{{ suggestion.description }}</div>
+                        
+                        {% if suggestion.comparison %}
+                        <div class="comparison-mini">
+                            <div class="comparison-item">
+                                <span class="label">Before:</span>
+                                <span class="badge {{ suggestion.comparison.original.level|lower }}">{{ suggestion.comparison.original.overall }}</span>
+                            </div>
+                            <div class="comparison-arrow">→</div>
+                            <div class="comparison-item">
+                                <span class="label">After:</span>
+                                <span class="badge {{ suggestion.comparison.rephrased.level|lower }}">{{ suggestion.comparison.rephrased.overall }}</span>
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        <div class="suggestion-actions">
+                            <button onclick="applySuggestion(this)" data-text="{{ suggestion.text }}" class="btn-apply">Apply This</button>
+                            <button onclick="copySuggestion(this)" data-text="{{ suggestion.text }}" class="btn-copy-small">Copy</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <h4>Toxicity Distribution</h4>
+        <div class="chart">
+            <canvas id="pie"></canvas>
+        </div>
+
+        <script>
+            new Chart(document.getElementById("pie"), {
+                type: "pie",
+                data: {
+                    labels: {{ result.scores.keys() | list | tojson }},
+                    datasets: [{
+                        data: {{ result.scores.values() | list | tojson }},
+                        backgroundColor: [
+                            'rgba(239, 68, 68, 0.8)',
+                            'rgba(220, 38, 38, 0.8)',
+                            'rgba(245, 158, 11, 0.8)',
+                            'rgba(234, 179, 8, 0.8)',
+                            'rgba(59, 130, 246, 0.8)',
+                            'rgba(147, 51, 234, 0.8)'
+                        ],
+                        borderColor: '#020617',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    plugins: {
+                        legend: {
+                            labels: { color: '#f8fafc' }
+                        }
+                    }
+                }
+            });
+        </script>
+
+    </div>
+    {% endif %}
+
+    <!-- Batch Results Section -->
+    <div id="batchResults" style="display: none;">
+        <div class="batch-results-container">
+            <div class="results-header">
+                <h3>📊 Batch Analysis Results</h3>
+                <div class="export-buttons">
+                    <button onclick="exportResults('csv')" class="btn-export">📥 Export CSV</button>
+                    <button onclick="exportResults('json')" class="btn-export">📥 Export JSON</button>
+                </div>
+            </div>
+
+            <!-- Analytics Summary -->
+            <div class="analytics-summary">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalComments">0</div>
+                    <div class="stat-label">Total Comments</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="avgToxicity">0.00</div>
+                    <div class="stat-label">Avg Toxicity</div>
+                </div>
+                <div class="stat-card high">
+                    <div class="stat-value" id="highToxic">0</div>
+                    <div class="stat-label">High Toxic</div>
+                </div>
+                <div class="stat-card medium">
+                    <div class="stat-value" id="mediumToxic">0</div>
+                    <div class="stat-label">Medium Toxic</div>
+                </div>
+                <div class="stat-card low">
+                    <div class="stat-value" id="lowToxic">0</div>
+                    <div class="stat-label">Low/Non-Toxic</div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="charts-row">
+                <div class="chart-container">
+                    <h4>Toxicity Level Distribution</h4>
+                    <canvas id="levelChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h4>Category Breakdown</h4>
+                    <canvas id="categoryChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Detailed Results Table -->
+            <div class="results-table-container">
+                <h4>Detailed Results</h4>
+                <div class="table-wrapper">
+                    <table id="resultsTable" class="results-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Comment</th>
+                                <th>Toxicity</th>
+                                <th>Level</th>
+                                <th>Sentiment</th>
+                                <th>Top Category</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // =========================
+    // MODE SWITCHING
+    // =========================
+    
+    function switchMode(mode) {
+        const singleMode = document.getElementById('singleMode');
+        const batchMode = document.getElementById('batchMode');
+        const batchResults = document.getElementById('batchResults');
+        const resultBox = document.getElementById('resultBox');
+        
+        if (!singleMode || !batchMode || !batchResults) {
+            console.error('Required elements not found');
+            return;
+        }
+        
+        // Update button states
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.mode === mode) {
+                btn.classList.add('active');
+            }
+        });
+        
+        // Toggle modes
+        if (mode === 'single') {
+            singleMode.style.display = 'block';
+            batchMode.style.display = 'none';
+            batchResults.style.display = 'none';
+            if (resultBox) resultBox.style.display = 'block';
+        } else {
+            singleMode.style.display = 'none';
+            batchMode.style.display = 'block';
+            if (resultBox) resultBox.style.display = 'none';
+        }
+    }
+
+    // =========================
+    // BATCH ANALYSIS
+    // =========================
+    
+    let batchResultsData = [];
+    
+    const batchInput = document.getElementById('batchInput');
+    const batchCount = document.getElementById('batchCount');
+    const analyzeBatchBtn = document.getElementById('analyzeBatchBtn');
+    const clearBatchBtn = document.getElementById('clearBatchBtn');
+    const fileInput = document.getElementById('fileInput');
+    const importFileBtn = document.getElementById('importFileBtn');
+    const fileNameDisplay = document.getElementById('fileNameDisplay');
+    
+    // File Import Functionality
+    if (importFileBtn && fileInput) {
+        importFileBtn.addEventListener('click', function() {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            fileNameDisplay.textContent = `Loading: ${file.name}...`;
+            importFileBtn.disabled = true;
+            
+            try {
+                let text = '';
+                const fileExtension = file.name.split('.').pop().toLowerCase();
+                
+                if (fileExtension === 'txt') {
+                    text = await readTextFile(file);
+                } else if (fileExtension === 'csv') {
+                    text = await readCSVFile(file);
+                } else if (fileExtension === 'pdf') {
+                    text = await readPDFFile(file);
+                } else if (fileExtension === 'doc' || fileExtension === 'docx') {
+                    text = await readWordFile(file);
+                } else {
+                    throw new Error('Unsupported file type');
+                }
+                
+                if (text && batchInput) {
+                    batchInput.value = text;
+                    // Trigger input event to update count
+                    const event = new Event('input');
+                    batchInput.dispatchEvent(event);
+                    fileNameDisplay.textContent = `✓ Imported: ${file.name}`;
+                    fileNameDisplay.style.color = '#22c55e';
+                } else {
+                    throw new Error('No text extracted from file');
+                }
+                
+            } catch (error) {
+                console.error('File import error:', error);
+                fileNameDisplay.textContent = `✗ Error: ${error.message}`;
+                fileNameDisplay.style.color = '#ef4444';
+                alert('Failed to import file: ' + error.message);
+            } finally {
+                importFileBtn.disabled = false;
+                // Clear file input
+                fileInput.value = '';
+            }
+        });
+    }
+    
+    // File Reading Functions
+    async function readTextFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = (e) => reject(new Error('Failed to read text file'));
+            reader.readAsText(file);
+        });
+    }
+    
+    async function readCSVFile(file) {
+        return new Promise((resolve, reject) => {
+            Papa.parse(file, {
+                complete: (results) => {
+                    try {
+                        // Extract text from all cells and flatten to lines
+                        const lines = results.data
+                            .map(row => {
+                                // Join all cells in a row, or take first cell if only one column
+                                if (row.length === 1) {
+                                    return row[0].trim();
+                                } else {
+                                    return row.filter(cell => cell && cell.trim()).join(' ').trim();
+                                }
+                            })
+                            .filter(line => line.length > 0);
+                        
+                        if (lines.length === 0) {
+                            reject(new Error('No text found in CSV file'));
+                        } else {
+                            resolve(lines.join('\n'));
+                        }
+                    } catch (error) {
+                        reject(new Error('Failed to parse CSV: ' + error.message));
+                    }
+                },
+                error: (error) => reject(new Error('CSV parsing error: ' + error.message))
+            });
+        });
+    }
+    
+    async function readPDFFile(file) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                
+                // Configure PDF.js worker
+                if (typeof pdfjsLib !== 'undefined') {
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                    
+                    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                    let fullText = '';
+                    
+                    // Extract text from each page
+                    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                        const page = await pdf.getPage(pageNum);
+                        const textContent = await page.getTextContent();
+                        const pageText = textContent.items.map(item => item.str).join(' ');
+                        fullText += pageText + '\n';
+                    }
+                    
+                    // Split into lines and clean up
+                    const lines = fullText
+                        .split(/[\n\r]+/)
+                        .map(line => line.trim())
+                        .filter(line => line.length > 0);
+                    
+                    if (lines.length === 0) {
+                        reject(new Error('No text found in PDF'));
+                    } else {
+                        resolve(lines.join('\n'));
+                    }
+                } else {
+                    reject(new Error('PDF.js library not loaded'));
+                }
+            } catch (error) {
+                reject(new Error('Failed to read PDF: ' + error.message));
+            }
+        });
+    }
+    
+    async function readWordFile(file) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                
+                if (typeof mammoth !== 'undefined') {
+                    const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                    const text = result.value;
+                    
+                    // Split into lines and clean up
+                    const lines = text
+                        .split(/[\n\r]+/)
+                        .map(line => line.trim())
+                        .filter(line => line.length > 0);
+                    
+                    if (lines.length === 0) {
+                        reject(new Error('No text found in Word document'));
+                    } else {
+                        resolve(lines.join('\n'));
+                    }
+                } else {
+                    reject(new Error('Mammoth library not loaded'));
+                }
+            } catch (error) {
+                reject(new Error('Failed to read Word document: ' + error.message));
+            }
+        });
+    }
+    
+    if (batchInput && batchCount) {
+        batchInput.addEventListener('input', function() {
+            const comments = this.value.split('\n').filter(line => line.trim().length > 0);
+            batchCount.textContent = `${comments.length} comment${comments.length !== 1 ? 's' : ''}`;
+            batchCount.style.color = comments.length > 20 ? '#ef4444' : '#94a3b8';
+        });
+    }
+    
+    if (clearBatchBtn && batchInput && batchCount) {
+        clearBatchBtn.addEventListener('click', function() {
+            batchInput.value = '';
+            batchCount.textContent = '0 comments';
+            const batchResults = document.getElementById('batchResults');
+            if (batchResults) batchResults.style.display = 'none';
+        });
+    }
+    
+    if (analyzeBatchBtn) {
+        analyzeBatchBtn.addEventListener('click', async function() {
+            if (!batchInput) {
+                console.error('Batch input element not found');
+                return;
+            }
+            
+            const comments = batchInput.value.split('\n').filter(line => line.trim().length > 0);
+            
+            if (comments.length === 0) {
+                alert('Please enter at least one comment');
+                return;
+            }
+            
+            if (comments.length > 20) {
+                alert('Maximum 20 comments allowed per batch');
+                return;
+            }
+            
+            analyzeBatchBtn.disabled = true;
+            analyzeBatchBtn.textContent = 'Analyzing...';
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            if (loadingSpinner) loadingSpinner.style.display = 'block';
+            
+            try {
+                const results = [];
+                
+                // Analyze each comment
+                for (let i = 0; i < comments.length; i++) {
+                    try {
+                        const response = await fetch('/api/analyze', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                text: comments[i],
+                                include_details: true
+                            })
+                        });
+                        
+                        if (response.ok) {
+                            const data = await response.json();
+                            results.push({
+                                index: i + 1,
+                                text: comments[i],
+                                ...data
+                            });
+                        } else {
+                            console.error(`Failed to analyze comment ${i + 1}:`, response.status);
+                        }
+                        
+                        // Update progress
+                        analyzeBatchBtn.textContent = `Analyzing... ${i + 1}/${comments.length}`;
+                    } catch (err) {
+                        console.error(`Error analyzing comment ${i + 1}:`, err);
+                    }
+                }
+                
+                if (results.length > 0) {
+                    batchResultsData = results;
+                    displayBatchResults(results);
+                } else {
+                    alert('No comments were successfully analyzed. Please check your input and try again.');
+                }
+                
+            } catch (error) {
+                console.error('Batch analysis error:', error);
+                alert('Error analyzing batch: ' + error.message);
+            } finally {
+                if (loadingSpinner) loadingSpinner.style.display = 'none';
+                analyzeBatchBtn.disabled = false;
+                analyzeBatchBtn.textContent = 'Analyze Batch';
+            }
+        });
+    }
+    
+    function displayBatchResults(results) {
+        if (!results || results.length === 0) {
+            console.error('No results to display');
+            return;
+        }
+        
+        // Calculate statistics
+        const total = results.length;
+        const avgToxicity = (results.reduce((sum, r) => sum + r.overall, 0) / total).toFixed(2);
+        const highCount = results.filter(r => r.level === 'High').length;
+        const mediumCount = results.filter(r => r.level === 'Medium').length;
+        const lowCount = results.filter(r => ['Low', 'Very Low', 'Non-toxic'].includes(r.level)).length;
+        
+        // Update summary stats
+        const totalEl = document.getElementById('totalComments');
+        const avgEl = document.getElementById('avgToxicity');
+        const highEl = document.getElementById('highToxic');
+        const mediumEl = document.getElementById('mediumToxic');
+        const lowEl = document.getElementById('lowToxic');
+        
+        if (totalEl) totalEl.textContent = total;
+        if (avgEl) avgEl.textContent = avgToxicity;
+        if (highEl) highEl.textContent = highCount;
+        if (mediumEl) mediumEl.textContent = mediumCount;
+        if (lowEl) lowEl.textContent = lowCount;
+        
+        // Create level distribution chart
+        const levelCounts = {
+            'High': highCount,
+            'Medium': mediumCount,
+            'Low': results.filter(r => r.level === 'Low').length,
+            'Very Low': results.filter(r => r.level === 'Very Low').length,
+            'Non-toxic': results.filter(r => r.level === 'Non-toxic').length
+        };
+        
+        createLevelChart(levelCounts);
+        
+        // Create category chart
+        const categoryTotals = {};
+        results.forEach(r => {
+            Object.entries(r.scores).forEach(([category, score]) => {
+                if (!categoryTotals[category]) categoryTotals[category] = 0;
+                categoryTotals[category] += score;
+            });
+        });
+        
+        createCategoryChart(categoryTotals);
+        
+        // Populate results table
+        const tbody = document.getElementById('resultsTableBody');
+        if (tbody) {
+            tbody.innerHTML = '';
+            
+            results.forEach(result => {
+                const topCategory = Object.entries(result.scores)
+                    .sort((a, b) => b[1] - a[1])[0];
+                
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${result.index}</td>
+                    <td class="comment-cell">${escapeHtml(result.text.substring(0, 100))}${result.text.length > 100 ? '...' : ''}</td>
+                    <td><span class="badge-small ${result.level.toLowerCase().replace(' ', '-')}">${result.overall}</span></td>
+                    <td><span class="badge ${result.level.toLowerCase().replace(' ', '-')}">${result.level}</span></td>
+                    <td><span class="sentiment-${result.sentiment.toLowerCase()}">${result.sentiment}</span></td>
+                    <td>${topCategory[0]}: ${topCategory[1]}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+        
+        // Show results
+        const batchResultsEl = document.getElementById('batchResults');
+        if (batchResultsEl) {
+            batchResultsEl.style.display = 'block';
+            batchResultsEl.scrollIntoView({ behavior: 'smooth' });
+        }
+    }
+    
+    function createLevelChart(levelCounts) {
+        const ctx = document.getElementById('levelChart');
+        if (!ctx) {
+            console.error('Level chart canvas not found');
+            return;
+        }
+        
+        if (window.levelChartInstance) {
+            window.levelChartInstance.destroy();
+        }
+        
+        window.levelChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: Object.keys(levelCounts),
+                datasets: [{
+                    label: 'Comments',
+                    data: Object.values(levelCounts),
+                    backgroundColor: [
+                        'rgba(239, 68, 68, 0.8)',
+                        'rgba(245, 158, 11, 0.8)',
+                        'rgba(234, 179, 8, 0.8)',
+                        'rgba(34, 197, 94, 0.8)',
+                        'rgba(59, 130, 246, 0.8)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { display: false },
+                    title: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: '#f8fafc', stepSize: 1 },
+                        grid: { color: '#1e293b' }
+                    },
+                    x: {
+                        ticks: { color: '#f8fafc' },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
+    
+    function createCategoryChart(categoryTotals) {
+        const ctx = document.getElementById('categoryChart');
+        if (!ctx) {
+            console.error('Category chart canvas not found');
+            return;
+        }
+        
+        if (window.categoryChartInstance) {
+            window.categoryChartInstance.destroy();
+        }
+        
+        window.categoryChartInstance = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: Object.keys(categoryTotals),
+                datasets: [{
+                    data: Object.values(categoryTotals),
+                    backgroundColor: [
+                        'rgba(239, 68, 68, 0.8)',
+                        'rgba(220, 38, 38, 0.8)',
+                        'rgba(245, 158, 11, 0.8)',
+                        'rgba(234, 179, 8, 0.8)',
+                        'rgba(59, 130, 246, 0.8)',
+                        'rgba(147, 51, 234, 0.8)'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#f8fafc' }
+                    }
+                }
+            }
+        });
+    }
+    
+    function exportResults(format) {
+        if (batchResultsData.length === 0) return;
+        
+        if (format === 'csv') {
+            const csv = convertToCSV(batchResultsData);
+            downloadFile(csv, 'toxicity-analysis.csv', 'text/csv');
+        } else if (format === 'json') {
+            const json = JSON.stringify(batchResultsData, null, 2);
+            downloadFile(json, 'toxicity-analysis.json', 'application/json');
+        }
+    }
+    
+    function convertToCSV(data) {
+        const headers = ['Index', 'Comment', 'Overall Toxicity', 'Level', 'Sentiment', 
+                        'Toxicity', 'Severe Toxicity', 'Obscene', 'Threat', 'Insult', 'Identity Attack'];
+        
+        const rows = data.map(r => [
+            r.index,
+            `"${r.text.replace(/"/g, '""')}"`,
+            r.overall,
+            r.level,
+            r.sentiment,
+            r.scores.toxicity,
+            r.scores.severe_toxicity,
+            r.scores.obscene,
+            r.scores.threat,
+            r.scores.insult,
+            r.scores.identity_attack
+        ]);
+        
+        return [headers, ...rows].map(row => row.join(',')).join('\n');
+    }
+    
+    function downloadFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+    
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // =========================
+    // SINGLE ANALYSIS (EXISTING CODE)
+    // =========================
+    
+    // Character counter
+    const textInput = document.getElementById('textInput');
+    const charCount = document.getElementById('charCount');
+    const analyzeForm = document.getElementById('analyzeForm');
+    const loadingSpinner = document.getElementById('loadingSpinner');
+    const clearBtn = document.getElementById('clearBtn');
+
+    textInput.addEventListener('input', function() {
+        const length = this.value.length;
+        charCount.textContent = `${length} / 500 characters`;
+        charCount.style.color = length > 450 ? '#ef4444' : '#94a3b8';
+    });
+
+    // Clear button
+    clearBtn.addEventListener('click', function() {
+        textInput.value = '';
+        charCount.textContent = '0 / 500 characters';
+        charCount.style.color = '#94a3b8';
+        textInput.focus();
+    });
+
+    // Loading spinner
+    analyzeForm.addEventListener('submit', function() {
+        loadingSpinner.style.display = 'block';
+    });
+
+    // Copy to clipboard function
+    function copyText() {
+        const highlightBox = document.querySelector('.highlight-box');
+        const text = highlightBox.innerText.replace('📋 Copy', '').trim();
+        
+        navigator.clipboard.writeText(text).then(function() {
+            const copyBtn = document.querySelector('.copy-btn');
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = '✓ Copied!';
+            copyBtn.style.background = '#16a34a';
+            
+            setTimeout(function() {
+                copyBtn.textContent = originalText;
+                copyBtn.style.background = '';
+            }, 2000);
+        }).catch(function(err) {
+            alert('Failed to copy text');
+        });
+    }
+
+    // Scroll to results
+    {% if result %}\n    window.addEventListener('load', function() {
+        document.getElementById('resultBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+    {% endif %}
+
+    // =========================
+    // REPHRASE FUNCTIONALITY
+    // =========================
+
+    function applySuggestion(button) {
+        const text = button.getAttribute('data-text');
+        const textInput = document.getElementById('textInput');
+        textInput.value = text;
+        
+        // Update character count
+        const event = new Event('input');
+        textInput.dispatchEvent(event);
+        
+        // Scroll to top
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        
+        // Flash the textarea
+        textInput.style.borderColor = '#16a34a';
+        setTimeout(() => {
+            textInput.style.borderColor = '';
+        }, 1000);
+    }
+
+    function copySuggestion(button) {
+        const text = button.getAttribute('data-text');
+        navigator.clipboard.writeText(text).then(function() {
+            // Visual feedback
+            const originalText = button.textContent;
+            button.textContent = '✓ Copied!';
+            button.style.background = '#16a34a';
+            
+            setTimeout(function() {
+                button.textContent = originalText;
+                button.style.background = '';
+            }, 2000);
+        }).catch(function(err) {
+            alert('Failed to copy text');
+        });
+    }
+
+</script>
+
+</body>
+</html>
+
